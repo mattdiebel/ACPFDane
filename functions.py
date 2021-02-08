@@ -1,7 +1,3 @@
-# Runoff Delivery Ratio Functions
-# M. Diebel, Dane County LWRD diebel.matthew@countyofdane.com
-# August 2020
-
 # Import modules and scripts
 import arcpy
 from arcpy import env
@@ -14,7 +10,7 @@ import rasterio as rs
 arcpy.CheckOutExtension("Spatial")
 arcpy.ImportToolbox(r'C:\LWRD\Miscellaneous\ArcGIS\ACPF_V3_Pro\acpf_V3_Pro.tbx') # modified version with FlowPaths and DepressionVolume tools
 storms = pd.read_csv("C:/LWRD/Yahara_CLEAN/design_storms.csv")
-exec(open("C:/LWRD/Yahara_CLEAN/flow_paths/LakeCat/LakeCat_findFlows.py").read()) # from https://github.com/USEPA/LakeCat/blob/master/LakeCat_functions.py
+exec(open("LakeCat_findFlows.py").read()) # from https://github.com/USEPA/LakeCat/blob/master/LakeCat_functions.py
 
 # Set environments
 arcpy.env.extent = os.path.join(path, "dem")
@@ -365,51 +361,4 @@ def selectUpstream():
             break
         else:
             i = j
-            
-# Create a raster of cut depths around a stream to reduce slope to specified value            
-def BankSlope(slope):
-    arcpy.conversion.PolylineToRaster(os.path.join(path,"flowPathsMain"), "OBJECTID", os.path.join(path,"strm_ras"), "", "", 2)
-    out_raster = arcpy.sa.ExtractByMask(os.path.join(path,"demCut"), os.path.join(path,"strm_ras"))
-    out_raster.save(os.path.join(path,"strm_elev"))
-    arcpy.env.parallelProcessingFactor = "100%"
-    out_raster = arcpy.sa.Watershed(os.path.join(path,"D8FlowDir"), os.path.join(path, "strm_elev"), "Value")
-    arcpy.env.parallelProcessingFactor = ""
-    out_raster.save(os.path.join(path,"strm_shed"))
-    out_raster = arcpy.sa.Minus(os.path.join(path,"demCut"), os.path.join(path,"strm_shed"))
-    out_raster.save(os.path.join(path,"RelElev"))
-    arcpy.analysis.Buffer(os.path.join(path,"flowPathsMain"), os.path.join(path,"buf50m"), "50 Meters", "FULL", "ROUND", "NONE", None, "PLANAR")
-    arcpy.management.FeatureToLine("buf50m", os.path.join(path,"buf50mLine"), None, "ATTRIBUTES")
-    arcpy.AddField_management("buf50mLine", "RelElev", "DOUBLE")
-    arcpy.CalculateField_management("buf50mLine", "RelElev", float(50/slope))
-    arcpy.management.Clip(os.path.join(path,"RelElev"), "", os.path.join(path,"RelElev50m"), "buf50m", 32767, "ClippingGeometry", "NO_MAINTAIN_EXTENT")
-    out_raster = arcpy.sa.Con(os.path.join(path,"RelElev50m"), 1, None, "Value <= 20")
-    out_raster.save(os.path.join(path,"channel"))
-    arcpy.conversion.RasterToPolygon(os.path.join(path,"channel"), os.path.join(path,"banksPoly"), "SIMPLIFY", "OBJECTID", "SINGLE_OUTER_PART", None)
-    arcpy.management.SelectLayerByAttribute("banksPoly", "NEW_SELECTION", "Shape_Length = (SELECT MAX(Shape_Length) FROM banksPoly)", "INVERT")
-    arcpy.DeleteFeatures_management("banksPoly")
-    arcpy.management.FeatureToLine("banksPoly", os.path.join(path,"banksLine"), None, "ATTRIBUTES")
-    arcpy.management.SelectLayerByAttribute("banksLine", "NEW_SELECTION", "Shape_Length = (SELECT MAX(Shape_Length) FROM banksLine)", "INVERT")
-    arcpy.DeleteFeatures_management("banksLine")
-    arcpy.AddField_management("banksLine", "RelElev", "DOUBLE")
-    arcpy.CalculateField_management("banksLine", "RelElev", 0)
-    arcpy.env.parallelProcessingFactor = "100%"
-    slope = arcpy.sa.TopoToRaster("banksLine RelElev Contour;buf50mLine RelElev Contour;buf50m # Boundary", 2, "", 20, None, None, "ENFORCE", "CONTOUR", 20, None, 1, 0, 2.5, 100, None, None, None, None, None, None, None, None)
-    arcpy.env.parallelProcessingFactor = ""
-    slopecm = arcpy.sa.Times("slope", 100)
-    cutRaw = arcpy.sa.Minus("RelElev50m", "slopecm")
-    cut = arcpy.sa.Con("cutRaw", 0, "cutRaw", "VALUE <= 0")
-    cut.save(os.path.join(path,"cut"))
-
-# This doesn't work sometimes
-def updateField():
-HUCs = ["601","602","603","604","701","702","703","801","802","803","901","902","903","904"]
-for i in HUCs:
-    path = "C:/LWRD/Yahara_CLEAN/flow_paths/databases/acpf070900020" + i + ".gdb"
-    HUC12 = "070900020" + i
-    # arcpy.AddField_management(os.path.join(path,"watershedsPoly"),"HUC12","TEXT")
-    arcpy.SelectLayerByAttribute_management(os.path.join(path,"watershedsPoly"), "CLEAR_SELECTION")
-    arcpy.CalculateField_management(os.path.join(path,"watershedsPoly"),"HUC12", "'" + HUC12 + "'")
-    
-    
-    
     
