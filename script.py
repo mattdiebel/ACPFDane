@@ -63,6 +63,6 @@ runoff()
 
 makeTransects()
 
-# R Manning Test Script
+# unit_stream_power.R
 
 joinUSP()
