@@ -1,5 +1,3 @@
-# tool_exec <- function(in_params, out_params) {
-
   ########## Specify geodatabase path!!! ##########
   setwd("C:/LWRD/Yahara_CLEAN/flow_paths/databases/acpf070900020701.gdb")
 
@@ -125,9 +123,6 @@
   arc.write(out_param_transects, all_transects, overwrite = TRUE)
   arc.write(out_param_flowPaths, flowPaths, overwrite = TRUE)
   
-#   return(out_params)
-# 
-# }
 
 # Test arguments for ManningWidth function
 # xsec = tdata
