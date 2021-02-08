@@ -1,5 +1,5 @@
 # ACPFDane
-Modified version of the Agricultural Conservation Planning Framework for Dane County, Wisconsin
+Modified version of the Agricultural Conservation Planning Framework [ACPF](https://acpf4watersheds.org/) for Dane County, Wisconsin
 
 This script takes a HUC12 LiDAR DEM as input and conducts the following analyses:
 1. Run ACPF tools:
