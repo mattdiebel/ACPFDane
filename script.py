@@ -1,14 +1,18 @@
+# This script was developed for ArcGIS 2.3
+# Some of the functions in this script need memory management improvements - they tend to cause ArcGIS to crash. Run one function at a time if this happens.
+# Comments between function calls are manual steps.
+
 # Add the following layers (with the specified names) to an ArcGIS Pro project:
     # "dem" (uncut, unfilled) for ACPF buffered watershed
     # "cutLines" (culvert lines)
     # "depOutlets" (depression outlet points from preliminary analysis, if applicable)
     # "CNlow" (runoff curve number raster)
     # "gSSURGO" (version from ACPF database)
-
+    
 # Specify path to geodatabase:
-path = "C:/LWRD/Yahara_CLEAN/flow_paths/databases/acpf070900020902.gdb"
+path = "acpf.gdb"
 
-exec(open("C:/LWRD/Miscellaneous/ArcGIS/ACPF_V3_Pro/Scripts/DeliveryRatioFunctions.py").read())
+exec(open("functions.py").read())
 
 arcpy.HydroConditioning("cutLines", None, "dem", os.path.join(path, "demCut"), os.path.join(path, "demFill"), os.path.join(path, "D8FlowDir"), os.path.join(path, "D8FlowAcc"), os.path.join(path, "Hshd"), 0.01)
 
@@ -16,7 +20,7 @@ arcpy.FlowPaths("D8FlowAcc", "D8FlowDir", 10, os.path.join(path, "flowPaths"))
 
 arcpy.DepressionVolume("demCut", "demFill", "gSSURGO", 0.01, 0.459, os.path.join(path, "Depressions"))
 
-deleteFalseDepressions()
+deleteFalseDepressions() # Only run this function if depOutlets is present
 
 # Leave "stub" flowLines on all inlets and outlets, and delete flowLines that connect to those stubs; Save Edits
 # Select any reach in watershed from flowPaths
