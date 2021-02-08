@@ -1,5 +1,5 @@
   ########## Specify geodatabase path!!! ##########
-  setwd("C:/LWRD/Yahara_CLEAN/flow_paths/databases/acpf070900020701.gdb")
+  setwd("acpf.gdb")
 
   library(arcgisbinding)
   arc.check_product()
