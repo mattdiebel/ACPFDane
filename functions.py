@@ -9,7 +9,7 @@ import pandas as pd
 import rasterio as rs
 arcpy.CheckOutExtension("Spatial")
 arcpy.ImportToolbox(r'C:\LWRD\Miscellaneous\ArcGIS\ACPF_V3_Pro\acpf_V3_Pro.tbx') # modified version with FlowPaths and DepressionVolume tools
-storms = pd.read_csv("C:/LWRD/Yahara_CLEAN/design_storms.csv")
+storms = pd.read_csv("design_storms.csv")
 exec(open("LakeCat_findFlows.py").read()) # from https://github.com/USEPA/LakeCat/blob/master/LakeCat_functions.py
 
 # Set environments
