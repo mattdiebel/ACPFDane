@@ -1,21 +1,3 @@
-# Runoff Delivery Ratio
-# M. Diebel, Dane County LWRD diebel.matthew@countyofdane.com
-# August 2020
-
-# This script takes a HUC12 LiDAR DEM as input and conducts the following analyses:
-# Run ACPF tools:
-    # Hydro conditioning: Cut DEM with culvert lines, fill depressions, calculate flow direction and accumulation.
-    # Flow paths: Define flow paths with 10 acre flow accumulation.
-    # Depressions: Define depressions in DEM above 20,000 sq ft in surface area.
-# Refine HUC12 boundary
-# Delineate flow path and depression watersheds
-# Define watershed topology through node intersections and LakeCat tool
-# Loop through design storms
-    # Loop through watersheds to calculate incremental and cumulative runoff with curve number hydrology
-    # Loop through watersheds to calculate downstream runoff ratio
-# Calculate unit stream power of flow paths
-
-###############################################################################
 # Add the following layers (with the specified names) to an ArcGIS Pro project:
     # "dem" (uncut, unfilled) for ACPF buffered watershed
     # "cutLines" (culvert lines)
@@ -80,5 +62,3 @@ makeTransects()
 # R Manning Test Script
 
 joinUSP()
-
-RelativeElevation()
