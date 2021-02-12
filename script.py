@@ -1,4 +1,4 @@
-# This script was developed for ArcGIS 2.3
+# This script was developed for ArcGIS Pro 2.3
 # Some of the functions in this script need memory management improvements - they tend to cause ArcGIS to crash. Run one function at a time if this happens.
 # Comments between function calls are manual steps.
 
