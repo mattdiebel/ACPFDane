@@ -1,4 +1,5 @@
 # This R script estimates unit stream power for transects across flow paths using Manning's equation.
+# Transects and flow paths are created with the makeTransects Python function.
 # Discharge is estimated from drainage area with USGS 2-year recurrence interval regression equation.
 # Slope is estimated from upstream and downstream transects.
 # Roughness is assumed (0.04)
