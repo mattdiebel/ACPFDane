@@ -1,7 +1,7 @@
 # LatCat functions for defining watershed topology
-# Define all functions, then run findFlows(zone_file, fdr_file), where
-# zone_file is the watershed raster
-# fdr_file is the flow direction raster
+# Inputs:
+    # zone_file is the watershed raster
+    # fdr_file is the flow direction raster
 # both rasters must be tif format
 
 import numpy as np
