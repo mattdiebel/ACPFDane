@@ -1,100 +1,110 @@
 # LatCat functions for defining watershed topology
 # Inputs:
-    # zone_file is the watershed raster
-    # fdr_file is the flow direction raster
-# both rasters must be tif format
+# zone_file is the watershed raster
+# fdr_file is the flow direction raster
 
 import numpy as np
 import pandas as pd
-import rasterio as rs
+import re
+import arcpy
 
-def rollArray(a, d):	
+
+def rollArray(a, d):
     if len(d) == 4:
-        a = a[0,:]
+        a = a[0, :]
         new = np.roll(np.roll(a, d[0], axis=0), d[1], axis=1)
-        new[d[2],:] = a[d[2],:]
-        new[:, d[3]] = a[:, d[3]] 
+        new[d[2], :] = a[d[2], :]
+        new[:, d[3]] = a[:, d[3]]
     if len(d) == 3:
-        new = np.roll(a[0,:], d[0], axis=d[1])
+        new = np.roll(a[0, :], d[0], axis=d[1])
         if d[1] == 0:
-            new[d[2],:] = a[0,d[2],:]
+            new[d[2], :] = a[0, d[2], :]
         if d[1] == 1:
-            new[:,d[2]] = a[0,:,d[2]]
-    return np.expand_dims(new, axis=0) 
+            new[:, d[2]] = a[0, :, d[2]]
+    return np.expand_dims(new, axis=0)
+
 
 def makeFlows(arr, shiftd, fdr, path, nd):
-    iso = np.not_equal(arr, shiftd) * np.not_equal(shiftd, nd) * np.not_equal(arr, nd)  # cells change value after shift * cells not equal to NoData
-    pth = np.equal(fdr,path)  # True when equal to path value
-    val = iso * pth * arr 
+    iso = np.not_equal(arr, shiftd) * np.not_equal(shiftd, nd) * np.not_equal(arr,
+                                                                              nd)  # cells change value after shift * cells not equal to NoData
+    pth = np.equal(fdr, path)  # True when equal to path value
+    val = iso * pth * arr
     shiftval = iso * pth * shiftd
-    idx = np.not_equal(val,shiftd)
+    idx = np.not_equal(val, shiftd)
     fromcom = val[idx]
     tocom = shiftval[idx]
     fromcom = fromcom[fromcom > 0]
-    tocom = tocom[tocom > 0]    
+    tocom = tocom[tocom > 0]
     # don't load-in the entire array to the DF, just connection vals
-    df = pd.DataFrame({'TOCOMID' : tocom, 
-                       'FROMCOMID' : fromcom,
-                            'move' : path})
-    return df.drop_duplicates(['FROMCOMID','TOCOMID'])
+    df = pd.DataFrame({'TOCOMID': tocom,
+                       'FROMCOMID': fromcom,
+                       'move': path})
+    return df.drop_duplicates(['FROMCOMID', 'TOCOMID'])
 
-def compAll(arr, fdr ,moves, from_to, nd):
+
+def compAll(arr, fdr, moves, from_to, nd):
     for move in moves:
         flow = makeFlows(arr, rollArray(np.copy(arr), moves[move][0]), fdr, moves[move][1], nd)
-        from_to = pd.concat([from_to,flow])
+        from_to = pd.concat([from_to, flow])
     return from_to
-    
+
+
 def expand(window, size=1):
     r, c = window
     return ((r[0] - size, r[1] + size), (c[0] - size, c[1] + size))
+
 
 def check_window(window, w, h):
     r, c = window
     return ((max(0, r[0]), min(h, r[1])), (max(0, c[0]), min(w, c[1])))
 
-def chunk_windows(r, indexes=None, max_ram=250000000):
-    if indexes is None:
-        indexes = r.indexes
-    elif isinstance(indexes, int):
-        indexes = [indexes]
-    if not indexes:
-        raise ValueError('No indexes to read')
-    pixel_size = 0
-    for bidx in indexes:
-        if bidx not in r.indexes:
-            raise IndexError('band index out of range')
-        idx = r.indexes.index(bidx)
-        pixel_size += np.dtype(r.dtypes[idx]).itemsize  
+
+def lower_left_coord(r, window):
+    xmin = r.extent.XMin
+    ymax = r.extent.XMin
+    cell_size = r.meanCellHeight
+    lower_x = xmin + window[1][0] * cell_size
+    lower_y = ymax - window[0][1] * cell_size
+    return arcpy.Point(lower_x, lower_y)
+
+
+def chunk_windows(r, max_ram=250000000):
+    nbytes = int(re.findall(r'\d+', r.pixelType)[0])
+    pixel_size = nbytes / 8
     chunk_size, _ = divmod(max_ram, pixel_size)
     r_h, r_w = r.height, r.width
     if chunk_size >= r_h * r_w:
         yield (0, 0), ((0, r_h), (0, r_w))
     else:
-        b_h, b_w = r.block_shapes[0]
+        b_h, b_w = [128, 128]
         d, _ = divmod(chunk_size, r_w * b_h)
         chunk_height = d * b_h
         d, m = divmod(r_h, chunk_height)
-        n_chunks = d + int(m>0)
+        n_chunks = d + int(m > 0)
         for i in range(n_chunks):
             row = i * chunk_height
             # height = min(chunk_height, r_h - row)
-            yield (i, 0), ((row, row+chunk_height), (0, r_w)) 
+            yield (i, 0), ((row, row + chunk_height), (0, r_w))
+
 
 def findFlows(zone_file, fdr_file):
-    moves = {'up':[(-1,0,-1),4],'left':[(-1,1,-1),1],'down' :[(1,0,0),64], 
-            'right':[(1,1,0),16],'downRight':[(1,1,0,0),32],
-            'downLeft':[(1,-1,0,-1), 128],'upRight':[(-1,1,-1,0),8],
-            'upLeft':[(-1,-1,-1,-1),2]}
+    moves = {'up': [(-1, 0, -1), 4], 'left': [(-1, 1, -1), 1], 'down': [(1, 0, 0), 64],
+             'right': [(1, 1, 0), 16], 'downRight': [(1, 1, 0, 0), 32],
+             'downLeft': [(1, -1, 0, -1), 128], 'upRight': [(-1, 1, -1, 0), 8],
+             'upLeft': [(-1, -1, -1, -1), 2]}
     flows = pd.DataFrame()
-    with rs.open(zone_file) as z:
-        with rs.open(fdr_file) as f:  # 0 is NoData for fdr
-            profile = z.profile.copy()
-            nd = profile['nodata']
-            assert z.shape == f.shape, "Rasters have different extents!"
-            for _, w in chunk_windows(z):  # currently defaults to 250MB
-                new_w = check_window(expand(w,2), z.width, z.height)
-                data = z.read(window=new_w)
-                f_r = f.read(window=new_w)
-                flows = pd.concat([flows,compAll(data,f_r,moves,flows,nd)])
-    return flows.drop_duplicates(['FROMCOMID','TOCOMID'])
-    
+    z = arcpy.Raster(zone_file)
+    f = arcpy.Raster(fdr_file)
+    assert z.shape == f.shape, "Rasters have different extents!"
+    for _, w in chunk_windows(z):  # currently defaults to 250MB
+        nd = r.noDataValue
+        new_w = check_window(expand(w, 2), z.width, z.height)
+        ll = lower_left_coord(r, window=new_w)
+        ncols = new_w[0][1] - new_w[0][0]
+        nrows = new_w[1][1] - new_w[1][0]
+        data = arcpy.RasterToNumPyArray(r, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+        data = data.reshape((1, nrows, ncols))
+        f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+        f_r = f_r.reshape((1, nrows, ncols))
+        flows = pd.concat([flows, compAll(data, f_r, moves, flows, nd)])
+    return flows.drop_duplicates(['FROMCOMID', 'TOCOMID'])
