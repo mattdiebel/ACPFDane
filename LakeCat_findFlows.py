@@ -4,6 +4,10 @@
 # fdr_file is the flow direction raster
 # both rasters must be tif format
 
+import numpy as np
+import pandas as pd
+import rasterio as rs
+
 def rollArray(a, d):	
     if len(d) == 4:
         a = a[0,:]
