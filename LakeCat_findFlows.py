@@ -95,14 +95,13 @@ def findFlows(zone_file, fdr_file):
     flows = pd.DataFrame()
     z = arcpy.Raster(zone_file)
     f = arcpy.Raster(fdr_file)
-    assert z.shape == f.shape, "Rasters have different extents!"
     for _, w in chunk_windows(z):  # currently defaults to 250MB
-        nd = r.noDataValue
+        nd = z.noDataValue
         new_w = check_window(expand(w, 2), z.width, z.height)
-        ll = lower_left_coord(r, window=new_w)
+        ll = lower_left_coord(z, window=new_w)
         ncols = new_w[0][1] - new_w[0][0]
         nrows = new_w[1][1] - new_w[1][0]
-        data = arcpy.RasterToNumPyArray(r, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+        data = arcpy.RasterToNumPyArray(z, lower_left_corner=ll, ncols=ncols, nrows=nrows)
         data = data.reshape((1, nrows, ncols))
         f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
         f_r = f_r.reshape((1, nrows, ncols))
