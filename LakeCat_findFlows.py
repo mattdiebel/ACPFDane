@@ -61,7 +61,7 @@ def check_window(window, w, h):
 
 def lower_left_coord(r, window):
     xmin = r.extent.XMin
-    ymax = r.extent.XMin
+    ymax = r.extent.YMin
     cell_size = r.meanCellHeight
     lower_x = xmin + window[1][0] * cell_size
     lower_y = ymax - window[0][1] * cell_size
