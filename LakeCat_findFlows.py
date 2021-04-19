@@ -63,7 +63,7 @@ def check_window(window, w, h):
 
 def lower_left_coord(r, window):
     xmin = r.extent.XMin
-    ymax = r.extent.YMin
+    ymax = r.extent.YMax
     cell_size = r.meanCellHeight
     lower_x = xmin + window[1][0] * cell_size
     lower_y = ymax - window[0][1] * cell_size
@@ -95,7 +95,7 @@ def findFlows(zone_file, fdr_file):
              'downLeft': [(1, -1, 0, -1), 128], 'upRight': [(-1, 1, -1, 0), 8],
              'upLeft': [(-1, -1, -1, -1), 2]}
     flows = pd.DataFrame()
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(dir=arcpy.env.scratchFolder) as td:
         temp_z = arcpy.CopyRaster_management(zone_file, os.path.join(td, "z.tif"))
         temp_f = arcpy.CopyRaster_management(fdr_file, os.path.join(td, "fdr.tif"))
         z = arcpy.Raster(temp_z)
@@ -104,8 +104,8 @@ def findFlows(zone_file, fdr_file):
             nd = int(z.noDataValue)
             new_w = check_window(expand(w, 2), z.width, z.height)
             ll = lower_left_coord(z, window=new_w)
-            ncols = new_w[0][1] - new_w[0][0]
-            nrows = new_w[1][1] - new_w[1][0]
+            nrows = new_w[0][1] - new_w[0][0]
+            ncols = new_w[1][1] - new_w[1][0]
             data = arcpy.RasterToNumPyArray(z, lower_left_corner=ll, ncols=ncols, nrows=nrows)
             data = data.reshape((1, nrows, ncols))
             f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
