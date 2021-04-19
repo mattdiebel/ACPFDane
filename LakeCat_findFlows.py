@@ -3,10 +3,12 @@
 # zone_file is the watershed raster
 # fdr_file is the flow direction raster
 
+import os
 import numpy as np
 import pandas as pd
 import re
 import arcpy
+import tempfile
 
 
 def rollArray(a, d):
@@ -25,8 +27,8 @@ def rollArray(a, d):
 
 
 def makeFlows(arr, shiftd, fdr, path, nd):
-    iso = np.not_equal(arr, shiftd) * np.not_equal(shiftd, nd) * np.not_equal(arr,
-                                                                              nd)  # cells change value after shift * cells not equal to NoData
+    # cells change value after shift * cells not equal to NoData
+    iso = np.not_equal(arr, shiftd) * np.not_equal(shiftd, nd) * np.not_equal(arr, nd)
     pth = np.equal(fdr, path)  # True when equal to path value
     val = iso * pth * arr
     shiftval = iso * pth * shiftd
@@ -77,9 +79,9 @@ def chunk_windows(r, max_ram=250000000):
         yield (0, 0), ((0, r_h), (0, r_w))
     else:
         b_h, b_w = [128, 128]
-        d, _ = divmod(chunk_size, r_w * b_h)
+        d, _ = map(int, divmod(chunk_size, r_w * b_h))
         chunk_height = d * b_h
-        d, m = divmod(r_h, chunk_height)
+        d, m = map(int, divmod(r_h, chunk_height))
         n_chunks = d + int(m > 0)
         for i in range(n_chunks):
             row = i * chunk_height
@@ -93,17 +95,21 @@ def findFlows(zone_file, fdr_file):
              'downLeft': [(1, -1, 0, -1), 128], 'upRight': [(-1, 1, -1, 0), 8],
              'upLeft': [(-1, -1, -1, -1), 2]}
     flows = pd.DataFrame()
-    z = arcpy.Raster(zone_file)
-    f = arcpy.Raster(fdr_file)
-    for _, w in chunk_windows(z):  # currently defaults to 250MB
-        nd = z.noDataValue
-        new_w = check_window(expand(w, 2), z.width, z.height)
-        ll = lower_left_coord(z, window=new_w)
-        ncols = new_w[0][1] - new_w[0][0]
-        nrows = new_w[1][1] - new_w[1][0]
-        data = arcpy.RasterToNumPyArray(z, lower_left_corner=ll, ncols=ncols, nrows=nrows)
-        data = data.reshape((1, nrows, ncols))
-        f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
-        f_r = f_r.reshape((1, nrows, ncols))
-        flows = pd.concat([flows, compAll(data, f_r, moves, flows, nd)])
+    with tempfile.TemporaryDirectory() as td:
+        temp_z = arcpy.CopyRaster_management(zone_file, os.path.join(td, "z.tif"))
+        temp_f = arcpy.CopyRaster_management(fdr_file, os.path.join(td, "fdr.tif"))
+        z = arcpy.Raster(temp_z)
+        f = arcpy.Raster(temp_f)
+        for _, w in chunk_windows(z):  # currently defaults to 250MB
+            nd = int(z.noDataValue)
+            new_w = check_window(expand(w, 2), z.width, z.height)
+            ll = lower_left_coord(z, window=new_w)
+            ncols = new_w[0][1] - new_w[0][0]
+            nrows = new_w[1][1] - new_w[1][0]
+            data = arcpy.RasterToNumPyArray(z, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+            data = data.reshape((1, nrows, ncols))
+            f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+            f_r = f_r.reshape((1, nrows, ncols))
+            flows = pd.concat([flows, compAll(data, f_r, moves, flows, nd)])
+        del z, f
     return flows.drop_duplicates(['FROMCOMID', 'TOCOMID'])
