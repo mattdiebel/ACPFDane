@@ -3,14 +3,12 @@ import arcpy
 from arcpy import env
 from arcpy.sa import *
 from copy import copy
-import sys, string, os, time
+import sys, string, os, time, re
 import numpy as np
 import pandas as pd
-import rasterio as rs
 arcpy.CheckOutExtension("Spatial")
 arcpy.ImportToolbox("acpf_V3_Pro.tbx") # modified versions of FlowPaths and DepressionVolume tools
 storms = pd.read_csv("design_storms.csv")
-exec(open("LakeCat_findFlows.py").read()) # from https://github.com/USEPA/LakeCat/blob/master/LakeCat_functions.py
 
 # Set environments
 arcpy.env.extent = os.path.join(path, "dem")
@@ -146,17 +144,112 @@ def watershed():
 def watershedPolygons():
     arcpy.RasterToPolygon_conversion(os.path.join(path, "watersheds"), os.path.join(path, "watershedsPoly"), "NO_SIMPLIFY", "Value", "MULTIPLE_OUTER_PART")
     
+# LakeCat functions
+def rollArray(a, d):
+    if len(d) == 4:
+        a = a[0, :]
+        new = np.roll(np.roll(a, d[0], axis=0), d[1], axis=1)
+        new[d[2], :] = a[d[2], :]
+        new[:, d[3]] = a[:, d[3]]
+    if len(d) == 3:
+        new = np.roll(a[0, :], d[0], axis=d[1])
+        if d[1] == 0:
+            new[d[2], :] = a[0, d[2], :]
+        if d[1] == 1:
+            new[:, d[2]] = a[0, :, d[2]]
+    return np.expand_dims(new, axis=0)
+
+
+def makeFlows(arr, shiftd, fdr, path, nd):
+    # cells change value after shift * cells not equal to NoData
+    iso = np.not_equal(arr, shiftd) * np.not_equal(shiftd, nd) * np.not_equal(arr, nd)
+    pth = np.equal(fdr, path)  # True when equal to path value
+    val = iso * pth * arr
+    shiftval = iso * pth * shiftd
+    idx = np.not_equal(val, shiftd)
+    fromcom = val[idx]
+    tocom = shiftval[idx]
+    fromcom = fromcom[fromcom > 0]
+    tocom = tocom[tocom > 0]
+    # don't load-in the entire array to the DF, just connection vals
+    df = pd.DataFrame({'TOCOMID': tocom,
+                       'FROMCOMID': fromcom,
+                       'move': path})
+    return df.drop_duplicates(['FROMCOMID', 'TOCOMID'])
+
+
+def compAll(arr, fdr, moves, from_to, nd):
+    for move in moves:
+        flow = makeFlows(arr, rollArray(np.copy(arr), moves[move][0]), fdr, moves[move][1], nd)
+        from_to = pd.concat([from_to, flow])
+    return from_to
+
+
+def expand(window, size=1):
+    r, c = window
+    return ((r[0] - size, r[1] + size), (c[0] - size, c[1] + size))
+
+
+def check_window(window, w, h):
+    r, c = window
+    return ((max(0, r[0]), min(h, r[1])), (max(0, c[0]), min(w, c[1])))
+
+
+def lower_left_coord(r, window):
+    xmin = r.extent.XMin
+    ymax = r.extent.YMax
+    cell_size = r.meanCellHeight
+    lower_x = xmin + window[1][0] * cell_size
+    lower_y = ymax - window[0][1] * cell_size
+    return arcpy.Point(lower_x, lower_y)
+
+
+def chunk_windows(r, max_ram=250000000):
+    nbytes = int(re.findall(r'\d+', r.pixelType)[0])
+    pixel_size = nbytes / 8
+    chunk_size, _ = divmod(max_ram, pixel_size)
+    r_h, r_w = r.height, r.width
+    if chunk_size >= r_h * r_w:
+        yield (0, 0), ((0, r_h), (0, r_w))
+    else:
+        b_h, b_w = [128, 128]
+        d, _ = map(int, divmod(chunk_size, r_w * b_h))
+        chunk_height = d * b_h
+        d, m = map(int, divmod(r_h, chunk_height))
+        n_chunks = d + int(m > 0)
+        for i in range(n_chunks):
+            row = i * chunk_height
+            # height = min(chunk_height, r_h - row)
+            yield (i, 0), ((row, row + chunk_height), (0, r_w))
+
+
+def findFlows(zone_file, fdr_file):
+    moves = {'up': [(-1, 0, -1), 4], 'left': [(-1, 1, -1), 1], 'down': [(1, 0, 0), 64],
+             'right': [(1, 1, 0), 16], 'downRight': [(1, 1, 0, 0), 32],
+             'downLeft': [(1, -1, 0, -1), 128], 'upRight': [(-1, 1, -1, 0), 8],
+             'upLeft': [(-1, -1, -1, -1), 2]}
+    flows = pd.DataFrame()
+    temp_z = arcpy.CopyRaster_management(zone_file, os.path.join(arcpy.env.scratchFolder, "z.tif"))
+    temp_f = arcpy.CopyRaster_management(fdr_file, os.path.join(arcpy.env.scratchFolder, "fdr.tif"))
+    z = arcpy.Raster(temp_z)
+    f = arcpy.Raster(temp_f)
+    for _, w in chunk_windows(z):  # currently defaults to 250MB
+        nd = int(z.noDataValue)
+        new_w = check_window(expand(w, 2), z.width, z.height)
+        ll = lower_left_coord(z, window=new_w)
+        nrows = new_w[0][1] - new_w[0][0]
+        ncols = new_w[1][1] - new_w[1][0]
+        data = arcpy.RasterToNumPyArray(z, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+        data = data.reshape((1, nrows, ncols))
+        f_r = arcpy.RasterToNumPyArray(f, lower_left_corner=ll, ncols=ncols, nrows=nrows)
+        f_r = f_r.reshape((1, nrows, ncols))
+        flows = pd.concat([flows, compAll(data, f_r, moves, flows, nd)])
+    del z, f
+    return flows.drop_duplicates(['FROMCOMID', 'TOCOMID'])
+
 # Run watershed topology script from LakeCat
 def LakeCat():
-    zone_file = os.path.join(arcpy.env.scratchFolder, "watersheds.tif")
-    arcpy.CopyRaster_management(os.path.join(path, "watersheds"), zone_file)
-    fdr_file = os.path.join(arcpy.env.scratchFolder, "D8FlowDir.tif")
-    arcpy.CopyRaster_management(os.path.join(path, "D8FlowDir"), fdr_file)
-    df = findFlows(zone_file, fdr_file)
-    arcpy.Delete_management(os.path.join(arcpy.env.scratchFolder, "watersheds.tif"))
-    arcpy.Delete_management(os.path.join(arcpy.env.scratchFolder, "D8FlowDir.tif"))
-    
-    # Convert pandas dataframe to table
+    df = findFlows(os.path.join(path, "watersheds"), os.path.join(path, "D8FlowDir"))
     x = np.array(np.rec.fromrecords(df.values))
     names = df.dtypes.index.tolist()
     x.dtype.names = tuple(names)
@@ -222,9 +315,9 @@ def runoff():
         if i == j:
             break
     dsdf = pd.DataFrame(ds, columns = ['FROM_ID'])
-    dsdf['order'] = dsdf.index
+    dsdf['DSorder'] = dsdf.index
     df2 = pd.merge(df, dsdf, on = "FROM_ID")
-    df2 = df2.sort_values(by = 'order', ascending = False)
+    df2 = df2.sort_values(by = 'DSorder', ascending = False)
     df2 = df2.reset_index(drop=True)
     df2['S'] = 0 # 6
     df2['Qraw'] = 0 # 7
@@ -297,7 +390,7 @@ def runoff():
     arcpy.da.NumPyArrayToTable(x, arcpy.env.scratchGDB + "\\runoff")
     
     # Join runoff table to watershedsPoly
-    arcpy.JoinField_management("watershedsPoly", "FROM_ID", arcpy.env.scratchGDB + "\\runoff", "FROM_ID", ["runVolT","runInT","runOffT","RORUS","RORInc","RORDS"])
+    arcpy.JoinField_management("watershedsPoly", "FROM_ID", arcpy.env.scratchGDB + "\\runoff", "FROM_ID", ["runVolT","runInT","runOffT","RORUS","RORInc","RORDS","DSorder"])
     arcpy.Delete_management(arcpy.env.scratchGDB + "\\runoff")
     arcpy.Delete_management(arcpy.env.scratchGDB + "\\CNTable")
 
@@ -314,7 +407,7 @@ def depOutlets():
     arcpy.DeleteField_management("depOutlets", ["Join_Count"])
     arcpy.DeleteField_management("depOutlets", ["TARGET_FID"])
 
-# Unit stream power
+# Make transects across flowPaths for stream power and travel time calculations
 def makeTransects():
     # Smoothing doesn't seem to fix the transect orientation issue
     # arcpy.management.CopyFeatures("flowPaths", os.path.join(path,"flowPathsSmooth"), None, None, None, None)
@@ -338,14 +431,43 @@ def makeTransects():
     arcpy.CalculateGeometryAttributes_management("flowPaths", [["LengthM","LENGTH"]], "METERS")
     arcpy.Delete_management(os.path.join(path,"flowPathsFA"))
     arcpy.Delete_management(os.path.join(path,"flowPathsR"))
+    
+# Flow path point elevation drop and flow accumulation
+def flowPathPoints():
+    arcpy.management.GeneratePointsAlongLines(os.path.join(path,"flowPathsRaw"), os.path.join(path,"flowPathPoints2"), "DISTANCE", "10 Meters", None, "END_POINTS")
+    arcpy.DeleteField_management("flowPathPoints2", ["Shape_Length","FROM_ID","TO_ID","FlowAcc","RORUS","LengthM","n","USP","TT"])
+    arcpy.AlterField_management("flowPathPoints2", "ORIG_FID", "pathID", "pathID")
+    arcpy.AddField_management("flowPathPoints2", "pointID", "LONG")
+    arcpy.CalculateField_management("flowPathPoints2", "pointID", "!OBJECTID!")
+    arcpy.sa.ExtractValuesToPoints("flowPathPoints2", os.path.join(path,"demFill"), os.path.join(path,"flowPathPoints1"), "NONE", "VALUE_ONLY")
+    arcpy.AlterField_management("flowPathPoints1", "RASTERVALU", "Elevation", "Elevation")
+    arcpy.sa.ExtractValuesToPoints("flowPathPoints1", os.path.join(path,"D8FlowAcc"), os.path.join(path,"flowPathPoints"), "NONE", "VALUE_ONLY")
+    arcpy.AlterField_management("flowPathPoints", "RASTERVALU", "FlowAcc", "FlowAcc")
+    arcpy.AddField_management("flowPathPoints", "combID", "TEXT")
+    arcpy.CalculateField_management("flowPathPoints", "combID", 'str(!pathID!) + "-" + str(!pointID!)', "PYTHON3", '', "TEXT")
+    arcpy.AddField_management("flowPathPoints", "downID", "TEXT")
+    arcpy.CalculateField_management("flowPathPoints", "downID", 'str(!pathID!) + "-" + str(!pointID!+1)', "PYTHON3", '', "TEXT")
+    arcpy.management.CopyFeatures("flowPathPoints",os.path.join(path,"flowPathPointsCopy"))
+    arcpy.AlterField_management("flowPathPointsCopy", "Elevation", "DownElevation", "DownElevation")
+    arcpy.JoinField_management("flowPathPoints", "downID", "flowPathPointsCopy", "combID", ["DownElevation"])
+    arcpy.management.SelectLayerByAttribute("flowPathPoints", "NEW_SELECTION", "DownElevation IS NULL", None)
+    arcpy.management.DeleteFeatures("flowPathPoints")
+    arcpy.AddField_management("flowPathPoints", "ElevDrop", "LONG")
+    arcpy.management.CalculateField("flowPathPoints", "ElevDrop", "!Elevation! - !DownElevation!", "PYTHON3", '', "TEXT")
+    arcpy.Delete_management(os.path.join(path,"flowPathPointsCopy"))
+    arcpy.Delete_management(os.path.join(path,"flowPathPoints2"))
+    arcpy.Delete_management(os.path.join(path,"flowPathPoints1"))
 
-def joinUSP(): 
-    arcpy.JoinField_management("flowPaths", "FROM_ID", os.path.join(path,"flowPathsUSP"), "FROM_ID", ["USP"])
-    arcpy.JoinField_management("transects", "OBJECTID", os.path.join(path,"transectsUSP"), "transectID", ["Qd","S","W","USP"])
+# Join results of R Manning test script to flowPaths, transects, and watershedsPoly
+def USPTravel(): 
+    arcpy.JoinField_management("flowPaths", "FROM_ID", os.path.join(path,"flowPathsUSP"), "FROM_ID", ["n","USP","TT"])
+    arcpy.JoinField_management("transects", "OBJECTID", os.path.join(path,"transectsUSP"), "transectID", ["Qd","S","W","USP","TT"])
+    arcpy.JoinField_management("watershedsPoly", "FROM_ID", os.path.join(path,"watershedsTTDS"), "FROM_ID", ["TT","TTDS"])
     arcpy.Delete_management(os.path.join(path,"flowPathsUSP"))
     arcpy.Delete_management(os.path.join(path,"transectsUSP"))
+    arcpy.Delete_management(os.path.join(path,"watershedsTTDS"))
     arcpy.Delete_management(os.path.join(path,"transectPoints"))
-    arcpy.Delete_management(os.path.join(path,"transectPoints2"))
+    arcpy.Delete_management(os.path.join(path,"transectPoints2"))    
     
 # Select watersheds that are upstream of a selected watershed
 def selectUpstream():
@@ -361,4 +483,37 @@ def selectUpstream():
             break
         else:
             i = j
-    
+            
+# Create a raster of cut depths around a stream to reduce slope to specified value            
+def BankSlope(slope):
+    arcpy.conversion.PolylineToRaster(os.path.join(path,"flowPathsMain"), "OBJECTID", os.path.join(path,"strm_ras"), "", "", 2)
+    out_raster = arcpy.sa.ExtractByMask(os.path.join(path,"demCut"), os.path.join(path,"strm_ras"))
+    out_raster.save(os.path.join(path,"strm_elev"))
+    arcpy.env.parallelProcessingFactor = "100%"
+    out_raster = arcpy.sa.Watershed(os.path.join(path,"D8FlowDir"), os.path.join(path, "strm_elev"), "Value")
+    arcpy.env.parallelProcessingFactor = ""
+    out_raster.save(os.path.join(path,"strm_shed"))
+    out_raster = arcpy.sa.Minus(os.path.join(path,"demCut"), os.path.join(path,"strm_shed"))
+    out_raster.save(os.path.join(path,"RelElev"))
+    arcpy.analysis.Buffer(os.path.join(path,"flowPathsMain"), os.path.join(path,"buf50m"), "50 Meters", "FULL", "ROUND", "NONE", None, "PLANAR")
+    arcpy.management.FeatureToLine("buf50m", os.path.join(path,"buf50mLine"), None, "ATTRIBUTES")
+    arcpy.AddField_management("buf50mLine", "RelElev", "DOUBLE")
+    arcpy.CalculateField_management("buf50mLine", "RelElev", float(50/slope))
+    arcpy.management.Clip(os.path.join(path,"RelElev"), "", os.path.join(path,"RelElev50m"), "buf50m", 32767, "ClippingGeometry", "NO_MAINTAIN_EXTENT")
+    out_raster = arcpy.sa.Con(os.path.join(path,"RelElev50m"), 1, None, "Value <= 20")
+    out_raster.save(os.path.join(path,"channel"))
+    arcpy.conversion.RasterToPolygon(os.path.join(path,"channel"), os.path.join(path,"banksPoly"), "SIMPLIFY", "OBJECTID", "SINGLE_OUTER_PART", None)
+    arcpy.management.SelectLayerByAttribute("banksPoly", "NEW_SELECTION", "Shape_Length = (SELECT MAX(Shape_Length) FROM banksPoly)", "INVERT")
+    arcpy.DeleteFeatures_management("banksPoly")
+    arcpy.management.FeatureToLine("banksPoly", os.path.join(path,"banksLine"), None, "ATTRIBUTES")
+    arcpy.management.SelectLayerByAttribute("banksLine", "NEW_SELECTION", "Shape_Length = (SELECT MAX(Shape_Length) FROM banksLine)", "INVERT")
+    arcpy.DeleteFeatures_management("banksLine")
+    arcpy.AddField_management("banksLine", "RelElev", "DOUBLE")
+    arcpy.CalculateField_management("banksLine", "RelElev", 0)
+    arcpy.env.parallelProcessingFactor = "100%"
+    slope = arcpy.sa.TopoToRaster("banksLine RelElev Contour;buf50mLine RelElev Contour;buf50m # Boundary", 2, "", 20, None, None, "ENFORCE", "CONTOUR", 20, None, 1, 0, 2.5, 100, None, None, None, None, None, None, None, None)
+    arcpy.env.parallelProcessingFactor = ""
+    slopecm = arcpy.sa.Times("slope", 100)
+    cutRaw = arcpy.sa.Minus("RelElev50m", "slopecm")
+    cut = arcpy.sa.Con("cutRaw", 0, "cutRaw", "VALUE <= 0")
+    cut.save(os.path.join(path,"cut"))
