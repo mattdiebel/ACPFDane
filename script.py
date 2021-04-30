@@ -1,5 +1,6 @@
 # This script was developed for ArcGIS Pro 2.3
 # Some of the functions in this script need memory management improvements - they tend to cause ArcGIS to crash. Run one function at a time if this happens.
+# Updated to ArcGIS Pro 2.7 and no longer crashes :)
 # Comments between function calls are manual steps.
 
 # Add the following layers (with the specified names) to an ArcGIS Pro project:
@@ -20,7 +21,7 @@ arcpy.FlowPaths("D8FlowAcc", "D8FlowDir", 10, os.path.join(path, "flowPaths"))
 
 arcpy.DepressionVolume("demCut", "demFill", "gSSURGO", 0.01, 0.459, os.path.join(path, "Depressions"))
 
-deleteFalseDepressions() # Only run this function if depOutlets is present
+deleteFalseDepressions() # Only use where depOutlets from previous run are available
 
 # Leave "stub" flowLines on all inlets and outlets, and delete flowLines that connect to those stubs; Save Edits
 # Select any reach in watershed from flowPaths
@@ -63,6 +64,12 @@ runoff()
 
 makeTransects()
 
-# unit_stream_power.R
+# R Manning Test Script
 
-joinUSP()
+USPTravel()
+
+# Other functions
+
+RelativeElevation()
+
+flowPathPoints()
