@@ -1,0 +1,43 @@
+Depressions
+  Depress_ID    Depression ID (joins to FROM_ID in watershedsPoly)
+  TO_ID         ID of next downstream drainage network segment or depression
+  HUC12         12-digit Hydrologic Unit Code
+  PctHydric     Hydric soil (percent of depression area)
+  VolAcreFt     Depression volume (acre-feet)
+  MaxDepthCM    Maximum depression depth (cm)
+  
+flowPaths
+  FROM_ID       Segment ID (joins to FROM_ID in watershedsPoly)
+  TO_ID         ID of next downstream drainage network segment or depression
+  HUC12         12-digit Hydrologic Unit Code
+  FlowAcc       Flow accumulation at downstream end of segment (pixels)
+  RORUS         Upstream runoff ratio (fraction of runoff generated in this watershed and all upstream watersheds that leaves this watershed)
+  n             Number of transects on segment
+  USP           Average unit stream power at transects spaced every 100 meters along segment (watts per square meter)
+  TT            Travel time of bankfull flow along segement (hours)
+  
+Transects
+  pathID        FROM_ID of flowPath
+  Qd            Bankfull discharge estimate from USGS equation (cfs)
+  S             Channel slope
+  W             Bankfull flow width (m)
+  USP           Unit stream power at transect (watts per square meter)
+  TT            Travel time of bankfull flow to next downstream transect (hours)
+  
+watershedsPoly
+  FROM_ID       watershed ID (joins to FROM_ID in flowPaths and Depress_ID in Depressions)
+  TO_ID         ID of next downstream watershed
+  PctHydric     Hydric soil (percent of depression area)
+  MaxDepthCM    Maximum depression depth (cm)
+  VolAcreFt     Depression volume (acre-feet)
+  AreaAcres     polygon area (acres)
+  CNlow         Runoff curve number (low estimate assuming good hydrologic condition from EVAAL)
+  DSorder       Downstream sort order (0 is watershed outlet)
+  runVolT       Average annual runoff volume generated in watershed (acre-feet)
+  runInT        Average annual runoff volume generated in watershed and flowing into watershed from upstream (acre-feet)
+  runOffT       Average annual runoff volume leaving watershed (acre-feet)
+  RORUS         Upstream runoff ratio (fraction of runoff generated in this watershed and all upstream watersheds that leaves this watershed)
+  RORInc        Incremental runoff ratio (fraction of RunoffInt that leaves watershed)
+  RORDS         Downstream runoff ratio (fraction of RunoffInt that is delivered to HUC12 outlet)
+  TT            Travel time of bankfull flow through watershed (hours)
+  TTDS          Travel time of bankfull flow to HUC12 outlet (hours)
