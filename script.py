@@ -1,29 +1,29 @@
-# This script was developed for ArcGIS Pro 2.3
-# Some of the functions in this script need memory management improvements - they tend to cause ArcGIS to crash. Run one function at a time if this happens.
-# Updated to ArcGIS Pro 2.7 and no longer crashes :)
-# Comments between function calls are manual steps.
+# Follow this script to run the ACPFDane functions for a single HUC12 watershed.
+# The functions were written for ArcGIS Pro 2.8.
+
+exec(open("functions.py").read())
 
 # Add the following layers (with the specified names) to an ArcGIS Pro project:
     # "dem" (uncut, unfilled) for ACPF buffered watershed
     # "cutLines" (culvert lines)
-    # "depOutlets" (depression outlet points from preliminary analysis, if applicable)
+    # "stormsewers" (storm sewer lines)
     # "CNlow" (runoff curve number raster)
     # "gSSURGO" (version from ACPF database)
     
 # Specify path to geodatabase:
 path = "acpf.gdb"
 
-exec(open("functions.py").read())
+# Run the following functions in order.    
+# Comments between function calls are manual steps.
+# Functions without arguments use input layers and outputs from previous functions
 
-arcpy.HydroConditioning("cutLines", None, "dem", os.path.join(path, "demCut"), os.path.join(path, "demFill"), os.path.join(path, "D8FlowDir"), os.path.join(path, "D8FlowAcc"), os.path.join(path, "Hshd"), 0.01)
+conditionDEM()
 
-arcpy.FlowPaths("D8FlowAcc", "D8FlowDir", 10, os.path.join(path, "flowPaths"))
+flowPaths(AreaThreshold) # AreaThreshold is flow accumulation (acres) threshold for flow paths
 
-arcpy.DepressionVolume("demCut", "demFill", "gSSURGO", 0.01, 0.459, os.path.join(path, "Depressions"))
+Depressions(MinimumSize) # MinimumSize is minimum depression area (acres)
 
-deleteFalseDepressions() # Only use where depOutlets from previous run are available
-
-# Leave "stub" flowLines on all inlets and outlets, and delete flowLines that connect to those stubs; Save Edits
+# Leave "stub" flowLines on all inlets and outlets, and delete flowLines that connect to those stubs
 # Select any reach in watershed from flowPaths
 
 findConnected()
@@ -58,7 +58,7 @@ watershedAttributes()
 # Edit TO_ID of outlet flowPath and watershedsPoly to Null
 # Check that all watersheds except outlet have a TO_ID
 
-runoff()
+runoffEvent()
 
 # Map RORDS to check topology
 
@@ -67,9 +67,3 @@ makeTransects()
 # R Manning Test Script
 
 USPTravel()
-
-# Other functions
-
-RelativeElevation()
-
-flowPathPoints()
