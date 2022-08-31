@@ -7,16 +7,15 @@
 ManningWidth <- function(xsec, Qd, S, n = 0.04) {
   
   data = xsec
-  data$Q = NA
-  data$Yr = rank(data$Y, ties.method = "first")
-  data$Q[data$Yr==1] = 0
   dX = data$X[2] - data$X[1]
+  ends = data.frame(X=c(min(data$X)-dX,max(data$X)+dX), Y=rep(max(data$Y)+1,2))
+  data = rbind(data,ends)
+  data$Yr = rank(data$Y, ties.method = "first")
+  data = data[order(data$X),]
+  data$Q = NA
+  data$Q[data$Yr==1] = 0
   
-  if(max(data$Y)==min(data$Y)) {
-    return((max(data$X) - min(data$X)) * 3.28084)
-    break
-  }
-  
+  # Calculate Q at elevation of each transect point
   for (i in 2:nrow(data)) {
     
     if(data$Y[data$Yr==i] == data$Y[data$Yr==i-1]) {
@@ -67,7 +66,12 @@ ManningWidth <- function(xsec, Qd, S, n = 0.04) {
     }
     
     W = sum(dati$W) * 3.28084
+    Dmax = max(dati$D) * 3.28084
     A = sum(dati$A) * 3.28084^2
+    Amax = max(dati$A) * 3.28084^2
+    Qprop = Amax / A
+    Wusp = dati$W[dati$A==max(dati$A)] * 3.28084
+    Wusp = Wusp[1]
     P = sum(dati$P) * 3.28084
     R = A/P
     Q = (1.49/n)*A*R^(2/3)*sqrt(S)
@@ -80,11 +84,14 @@ ManningWidth <- function(xsec, Qd, S, n = 0.04) {
   Ymax = data$Y[data$Yr==max(data$Yr[!is.na(data$Q)])]
   Ymin = data$Y[data$Yr==(max(data$Yr[!is.na(data$Q)])-1)]
   
+  
+  # If Qd fills the transect, return full transect dimensions
   if(max(data$Q, na.rm = TRUE) < Qd) {
-    return(W)
+    return(c(W,A,Dmax,Wusp,Qprop))
     break
   }
   
+  # If Qd does not fill the transect, adjust the flow elevation until Q is within 1% of Qd
   while (Qdiff > 0.01 * Qd) {
     
     Ystep = 0.1 * (Ymax - Ymin)
@@ -135,7 +142,12 @@ ManningWidth <- function(xsec, Qd, S, n = 0.04) {
       }
       
       W = sum(dati$W) * 3.28084
+      Dmax = max(dati$D) * 3.28084
       A = sum(dati$A) * 3.28084^2
+      Amax = max(dati$A) * 3.28084^2
+      Qprop = Amax / A
+      Wusp = dati$W[dati$A==max(dati$A)] * 3.28084
+      Wusp = Wusp[1]
       P = sum(dati$P) * 3.28084
       R = A/P
       if (A==0) {
@@ -145,6 +157,11 @@ ManningWidth <- function(xsec, Qd, S, n = 0.04) {
         }
       
       Ys$W[i] = W
+      Ys$Dmax[i] = Dmax
+      Ys$A[i] = A
+      Ys$Amax[i] = Amax
+      Ys$Qprop[i] = Qprop
+      Ys$Wusp[i] = Wusp
       Ys$Q[i] = Q
       if(Q>Qd) {break}
     }
@@ -152,17 +169,16 @@ ManningWidth <- function(xsec, Qd, S, n = 0.04) {
     Ys = Ys[!is.na(Ys$Q),]
     Ys$Qdiff = abs(Qd - Ys$Q)
     W = Ys$W[Ys$Qdiff==min(Ys$Qdiff)]
+    Dmax = Ys$Dmax[Ys$Qdiff==min(Ys$Qdiff)]
+    A = Ys$A[Ys$Qdiff==min(Ys$Qdiff)]
+    Wusp = Ys$Wusp[Ys$Qdiff==min(Ys$Qdiff)]
+    Qprop = Ys$Qprop[Ys$Qdiff==min(Ys$Qdiff)]
     
     Qdiff = min(Ys$Qdiff)
     Ymax = Ys$Y[nrow(Ys)]
     Ymin = Ys$Y[nrow(Ys)-1]
     
   }
-
-  return(W)
+  
+  return(c(W,A,Dmax,Wusp,Qprop))
 }
-
-
-
-
-
