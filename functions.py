@@ -7,14 +7,82 @@ import sys, string, os, time, re
 import numpy as np
 import pandas as pd
 arcpy.CheckOutExtension("Spatial")
-arcpy.ImportToolbox("acpf_V3_Pro.tbx") # modified versions of FlowPaths and DepressionVolume tools
-storms = pd.read_csv("design_storms.csv")
+aprx = arcpy.mp.ArcGISProject('CURRENT')
+m = aprx.activeMap
 
 # Set environments
 arcpy.env.extent = os.path.join(path, "dem")
 arcpy.env.snapRaster = os.path.join(path, "dem")
 arcpy.env.overwriteOutput = True
 
+# Condition DEM with cutLines and stormsewers
+def conditionDEM():
+    cut_zmin = arcpy.sa.ZonalStatistics("cutLines", "OBJECTID", "dem", "MINIMUM", "DATA")
+    stormsewer_zmin = arcpy.sa.ZonalStatistics("stormsewers", "OBJECTID", "dem", "MINIMUM", "DATA")
+    comb_zmin = arcpy.sa.CellStatistics([cut_zmin, stormsewer_zmin], "MINIMUM", "DATA")
+    DEMCut = Con(IsNull(comb_zmin), "dem", comb_zmin)
+    DEMCut.save(os.path.join(path, "demCut"))
+    DEMFill = Fill(DEMCut)
+    DEMFill.save(os.path.join(path, "demFill"))
+    arcpy.env.parallelProcessingFactor = "100%"
+    D8FlowDir = FlowDirection(DEMFill, "", "")    
+    D8Accumulation = FlowAccumulation(D8FlowDir, "", "INTEGER")    
+    arcpy.env.parallelProcessingFactor = ""
+    D8FlowDir.save(os.path.join(path,"D8FlowDir"))
+    D8Accumulation.save(os.path.join(path,"D8FlowAcc"))
+    m.addDataFromPath(os.path.join(path, "D8FlowDir"))
+    m.addDataFromPath(os.path.join(path, "D8FlowAcc"))
+    m.addDataFromPath(os.path.join(path, "demFill"))
+    m.addDataFromPath(os.path.join(path, "demCut"))
+    
+def FlowPaths(AreaThreshold):
+    number_cells = float(AreaThreshold) * 4046 / 4
+    FlowNetRas = Con(os.path.join(path, "D8FlowAcc"), 1, "", "VALUE >= %s" % number_cells)
+    Link = StreamLink(FlowNetRas, os.path.join(path, "D8FlowDir"))
+    StreamToFeature(Link, os.path.join(path, "D8FlowDir"), os.path.join(path, "flowPaths"), "NO_SIMPLIFY")
+    flowPathsCopy = arcpy.management.CopyFeatures(os.path.join(path, "flowPaths"))
+    arcpy.AddField_management(flowPathsCopy, "grid_code_to", "LONG")
+    arcpy.CalculateField_management(flowPathsCopy, "grid_code_to", "!grid_code!") 
+    arcpy.JoinField_management(os.path.join(path, "flowPaths"), "to_node", flowPathsCopy, "from_node", ["grid_code_to"])
+    m.removeLayer(m.listLayers("flowPaths_CopyFeatures*")[0])
+
+def Depressions(MinimumSize):
+    stormsewer_zmin = arcpy.sa.ZonalStatistics("stormsewers", "OBJECTID", "dem", "MINIMUM", "DATA")
+    demCutNoSS = Con(IsNull(stormsewer_zmin), os.path.join(path, "demCut"), os.path.join(path, "demFill"))
+    FillReg = Minus(os.path.join(path, "demFill"), demCutNoSS)
+    AllSinks = Con(FillReg, 1, "", "VALUE > 0.01")
+    Depressions = arcpy.RasterToPolygon_conversion(AllSinks, os.path.join(path, "Depressions"), "NO_SIMPLIFY")
+    MinSize = float(MinimumSize) * 4046
+    arcpy.MakeFeatureLayer_management(os.path.join(path, "Depressions"), "small_sinks", "\"Shape_Area\" < %s" % MinSize)
+    arcpy.DeleteFeatures_management("small_sinks")
+    arcpy.AddField_management(os.path.join(path, "Depressions"), "Depress_ID")
+    arcpy.CalculateField_management(os.path.join(path, "Depressions"), "Depress_ID", "10000 + !OBJECTID!", "PYTHON3")
+    gSSURGO_copy = arcpy.CopyRaster_management("gSSURGO", "gSSURGO_copy", "", 0, 0)
+    arcpy.AddField_management(gSSURGO_copy,"HydFlt","FLOAT","8","0")
+    arcpy.CalculateField_management(gSSURGO_copy,"HydFlt", '!Hydric!', "PYTHON")
+    HydricPct = Lookup(gSSURGO_copy, "HydFlt")
+    HydricTable = ZonalStatisticsAsTable(os.path.join(path, "Depressions"), "Depress_ID", HydricPct, "in_memory" + "\\HydricTable", "#", "MEAN")
+    arcpy.JoinField_management(os.path.join(path, "Depressions"), "Depress_ID", HydricTable, "Depress_ID", ["MEAN"])
+    arcpy.AddField_management(os.path.join(path, "Depressions"), "PctHydric", "FLOAT")
+    arcpy.CalculateField_management(os.path.join(path, "Depressions"), "PctHydric", "!MEAN!", "PYTHON")
+    arcpy.DeleteField_management(os.path.join(path, "Depressions"), ["MEAN"])
+    DepthStats = ZonalStatisticsAsTable(os.path.join(path, "Depressions"), "Depress_ID", FillReg, "in_memory" + "\\DepthStats", "", "MAXIMUM")
+    arcpy.JoinField_management(os.path.join(path, "Depressions"), "Depress_ID", DepthStats, "Depress_ID", ["MAX"])
+    arcpy.AddField_management(os.path.join(path, "Depressions"), "MaxDepthCM")
+    arcpy.CalculateField_management(os.path.join(path, "Depressions"), "MaxDepthCM", "!MAX!", "PYTHON")
+    arcpy.DeleteField_management(os.path.join(path, "Depressions"), ["gridcode", "MAX", "id"])
+    VolStats = ZonalStatisticsAsTable(os.path.join(path, "Depressions"), "Depress_ID", FillReg, "in_memory" + "\\VolStats", "", "SUM")
+    arcpy.JoinField_management(os.path.join(path, "Depressions"), "Depress_ID", VolStats, "Depress_ID", ["SUM"])
+    arcpy.AddField_management(os.path.join(path, "Depressions"), "VolAcreFt", "FLOAT")
+    SumDepthtoAcFt = 1233.48 / 0.01 / 2
+    arcpy.CalculateField_management(Depressions, "VolAcreFt", "(!SUM! / %s)" % SumDepthtoAcFt, "PYTHON")
+    arcpy.DeleteField_management(Depressions, ["SUM"])
+    m.removeLayer(m.listLayers("gSSURGO_copy")[0])
+    m.removeLayer(m.listLayers("small_sinks")[0])
+    m.removeTable(m.listTables("HydricTable")[0])
+    m.removeTable(m.listTables("DepthStats")[0])
+    m.removeTable(m.listTables("VolStats")[0])
+    
 # Select connected flow paths
 def findConnected():
     i = 0
@@ -26,14 +94,6 @@ def findConnected():
             break
         else:
             i = j
-
-# Delete depressions based on depOutlets codes: stormsewer and land use
-def deleteFalseDepressions():
-    arcpy.SelectLayerByAttribute_management("depOutlets", "CLEAR_SELECTION")
-    arcpy.management.SelectLayerByAttribute("depOutlets", "NEW_SELECTION", "CheckCode = '6' Or CheckCode = '7'", None)
-    arcpy.management.SelectLayerByLocation("Depressions", "INTERSECT", "depOutlets", None, "NEW_SELECTION", "NOT_INVERT")
-    arcpy.DeleteFeatures_management("Depressions")
-    arcpy.SelectLayerByAttribute_management("depOutlets", "CLEAR_SELECTION")
 
 # Use flow path watershed to refine HUC12 boundary
 def refineHUC12():
@@ -92,8 +152,8 @@ def defineTopology():
     arcpy.DeleteField_management("flowPaths", ["arcid","grid_code","from_node","to_node","grid_code_to","ORIG_FID","Depress_ID","MEAN"])
     arcpy.management.FeatureVerticesToPoints("flowPaths", os.path.join(path, "flowPathNodesUS"), "START")
     arcpy.management.FeatureVerticesToPoints("flowPaths", os.path.join(path, "flowPathNodesDS"), "END")
-    arcpy.management.AddGeometryAttributes("flowPathNodesUS", "POINT_X_Y_Z_M", None, None, None)
-    arcpy.management.AddGeometryAttributes("flowPathNodesDS", "POINT_X_Y_Z_M", None, None, None)
+    arcpy.management.AddXY(os.path.join(path, "flowPathNodesUS"))
+    arcpy.management.AddXY(os.path.join(path, "flowPathNodesDS"))
     arcpy.AddField_management("flowPathNodesUS", "LONLAT", "DOUBLE")
     arcpy.AddField_management("flowPathNodesDS", "LONLAT", "DOUBLE")
     arcpy.management.CalculateField("flowPathNodesUS", "LONLAT", "int(!POINT_X!)*10000000 + int(!POINT_Y!)", "PYTHON3", None)
@@ -121,7 +181,6 @@ def defineTopology():
     arcpy.Delete_management(os.path.join(path,"flowPathNodesDepJoin"))
     arcpy.Delete_management(os.path.join(path,"pathDepIntersect"))
     arcpy.Delete_management(arcpy.env.scratchGDB + "\\flowPathAcc")
-    arcpy.Delete_management(os.path.join(path,"Hshd"))
 
 # Convert flow paths and depressions to rasters and combine to make seeds
 def watershedSeeds():
@@ -288,88 +347,50 @@ def watershedAttributes():
     arcpy.Delete_management(arcpy.env.scratchGDB + "\\Topology")
     arcpy.Delete_management(arcpy.env.scratchGDB + "\\watersheds")
     
-# Calculate runoff volumes
-def runoff():
-    arcpy.SelectLayerByAttribute_management("watershedsPoly", "CLEAR_SELECTION")
-    # Calculate mean runoff curve number for watershedsPoly
-    arcpy.env.cellSize = "MINOF"
-    CNTable = arcpy.sa.ZonalStatisticsAsTable(os.path.join(path, "watersheds"), "Value", "CNlow", arcpy.env.scratchGDB + "\\CNTable", "DATA", "MEAN")
-    arcpy.JoinField_management("watershedsPoly", "FROM_ID", arcpy.env.scratchGDB + "\\CNTable", "VALUE", ["MEAN"])
-    arcpy.AddField_management("watershedsPoly", "CNlow", "FLOAT")
-    arcpy.CalculateField_management("watershedsPoly", "CNlow", "!MEAN!") 
-    arcpy.DeleteField_management("watershedsPoly", ["MEAN"])
-    
+# Calculate runoff volume from a single rainfall event
+def runoffEvent(P): 
     # Convert watershedsPoly table to pandas dataframe
-    arr = arcpy.da.FeatureClassToNumPyArray(os.path.join(path,"watershedsPoly"), ("FROM_ID", "TO_ID", "VolAcreFt", "AreaAcres", "CNlow"), null_value = 0)
-    df = pd.DataFrame(arr)
-    
-    # Sort watersheds in downstream order
-    ds = []
-    froms = df.FROM_ID[df.TO_ID==0].values.tolist()
-    ds.extend(froms)
-    while True:
-        i = len(ds)
-        froms = df.FROM_ID[df.TO_ID.isin(froms)].values.tolist()
-        ds.extend(froms)
-        j = len(ds)
-        if i == j:
-            break
-    dsdf = pd.DataFrame(ds, columns = ['FROM_ID'])
-    dsdf['DSorder'] = dsdf.index
-    df2 = pd.merge(df, dsdf, on = "FROM_ID")
+    arr = arcpy.da.FeatureClassToNumPyArray(os.path.join(path,"watershedsPoly"), ("FROM_ID", "TO_ID", "VolAcreFt", "AreaAcres", "CNlow", "DSorder"), null_value = 0)
+    df2 = pd.DataFrame(arr)
     df2 = df2.sort_values(by = 'DSorder', ascending = False)
     df2 = df2.reset_index(drop=True)
+
     df2['S'] = 0 # 6
     df2['Qraw'] = 0 # 7
     df2['runDep'] = 0  # 8
     df2['runVolS'] = 0 # 9
-    df2['runVolT'] = 0 # 10
-    df2['runInS'] = 0 # 11
-    df2['runOffS'] = 0 # 12
-    df2['runInT'] = 0 # 13
-    df2['runOffT'] = 0 # 14
-    df2['runInNDS'] = 0 # 15
-    df2['runInNDT'] = 0 # 16
-    df2['RORUS'] = 0 # 17
-    df2['RORInc'] = 0 # 18
-    df2['RORDS'] = 0 # 19
-    
-    
-    # Loop through design storms
-    s = 0
-    while s < len(storms):
-        P = storms.P[s]
-        df2.S = 1000 / df2.CNlow - 10
-        df2.Qraw = (P - 0.2 * df2.S)**2 / (P + 0.8 * df2.S)
-        df2.loc[P < 0.2 * df2.S, 'runDep'] = 0
-        df2.loc[P >= 0.2 * df2.S, 'runDep'] = df2.Qraw / 12
-        
-        # Loop through watersheds to calculate runIn and runOff
-        i = 0
-        while i < len(df2):
-            us = df2[df2.TO_ID == df2.FROM_ID[i]]
-            df2.iloc[i,9] = df2.AreaAcres[i] * df2.runDep[i] 
-            df2.iloc[i,10] = df2.runVolT[i] + df2.runVolS[i] * (s + 1)
-            df2.iloc[i,11] = df2.AreaAcres[i] * df2.runDep[i] + sum(us.runOffS)
-            df2.iloc[i,12] = max(df2.runInS[i] - df2.VolAcreFt[i], 0)
-            df2.iloc[i,13] = df2.runInT[i] + df2.runInS[i] * (s + 1)
-            df2.iloc[i,14] = df2.runOffT[i] + df2.runOffS[i] * (s + 1)
-            df2.iloc[i,15] = df2.runVolS[i] + sum(us.runInNDS)
-            df2.iloc[i,16] = df2.runInNDT[i] + df2.runInNDS[i] * (s + 1)
-            i += 1
-    
-        s += 1
-        
-    df2.RORUS = df2.runOffT / df2.runInNDT
+    df2['runInS'] = 0 # 10
+    df2['runOffS'] = 0 # 11
+    df2['runInNDS'] = 0 # 12
+    df2['RORUS'] = 0 # 13
+    df2['RORInc'] = 0 # 14
+    df2['RORDS'] = 0 # 15
+
+    df2.S = 1000 / df2.CNlow - 10
+    df2.Qraw = (P - 0.2 * df2.S)**2 / (P + 0.8 * df2.S)
+    df2.loc[P < 0.2 * df2.S, 'runDep'] = 0
+    df2.loc[P >= 0.2 * df2.S, 'runDep'] = df2.Qraw / 12
+
+    # Loop through watersheds to calculate runIn and runOff
+    i = 0
+    while i < len(df2):
+        us = df2[df2.TO_ID == df2.FROM_ID[i]]
+        df2.iloc[i,9] = df2.AreaAcres[i] * df2.runDep[i]
+        df2.iloc[i,10] = df2.AreaAcres[i] * df2.runDep[i] + sum(us.runOffS)
+        df2.iloc[i,11] = max(df2.runInS[i] - df2.VolAcreFt[i], 0)
+        df2.iloc[i,12] = df2.runVolS[i] + sum(us.runInNDS)
+        i += 1
+
+    df2.RORUS = df2.runOffS / df2.runInNDS
     df2.loc[df2.RORUS.isnull(), 'RORUS'] = 0
         
     # Loop through watersheds to calculate downstream runoff ratio
-    df2.loc[df2.runInT == 0, 'RORInc'] = 0
-    df2.loc[df2.runInT > 0, 'RORInc'] = df2.runOffT / df2.runInT
+    df2.loc[df2.runInS == 0, 'RORInc'] = 0
+    df2.loc[df2.runInS > 0, 'RORInc'] = df2.runOffS / df2.runInS
     i = 0
     while i < len(df2):
-        if df2.runOffT[i] == 0:
-            df2.iloc[i,19] = 0
+        if df2.runOffS[i] == 0:
+            df2.iloc[i,15] = 0
             i += 1
         else:
             ds = [df2.RORInc[i]]
@@ -380,57 +401,55 @@ def runoff():
                 if to == 0:
                     break
                 to = int(df2.TO_ID[df2.FROM_ID == to])
-            df2.iloc[i,19] = np.prod(ds)
+            df2.iloc[i,15] = np.prod(ds)
             i += 1
-    
+
     # Convert pandas dataframe to table
     x = np.array(np.rec.fromrecords(df2.values))
     names = df2.dtypes.index.tolist()
     x.dtype.names = tuple(names)
     arcpy.da.NumPyArrayToTable(x, arcpy.env.scratchGDB + "\\runoff")
-    
-    # Join runoff table to watershedsPoly
-    arcpy.JoinField_management("watershedsPoly", "FROM_ID", arcpy.env.scratchGDB + "\\runoff", "FROM_ID", ["runVolT","runInT","runOffT","RORUS","RORInc","RORDS","DSorder"])
-    arcpy.Delete_management(arcpy.env.scratchGDB + "\\runoff")
-    arcpy.Delete_management(arcpy.env.scratchGDB + "\\CNTable")
 
-# Add depression outlets
-def depOutlets():
-    depMaxFA = arcpy.sa.ZonalStatistics("Depressions", "Depress_ID", "D8FlowAcc", "MAXIMUM", "DATA")
-    # break
-    maxFA = Con(Raster("D8FlowAcc") == Raster("depMaxFA"), "D8FlowAcc")
-    maxFA.save(os.path.join(path, "maxFA"))
-    # break
-    arcpy.conversion.RasterToPoint("maxFA", os.path.join(path, "depOutlets"), "VALUE")
-    arcpy.analysis.SpatialJoin("depOutlets", "RoadCenterline", os.path.join(path,"depOutletsRoads"), "JOIN_ONE_TO_ONE", "KEEP_ALL", 'abvStreetN "abvStreetN" true true false 254 Text 0 0,First,#,RoadCenterline,abvStreetN,0,254', "CLOSEST", "1000 Meters", "RoadDist")
-    arcpy.analysis.SpatialJoin("depOutletsRoads", "cutLines", os.path.join(path, "depOutlets"), "JOIN_ONE_TO_ONE", "KEEP_ALL", 'RoadDist "RoadDist" true true false 8 Double 0 0,First,#,depOutletsRoads,RoadDist,-1,-1;abvStreetN "abvStreetN" true true false 254 Text 0 0,First,#,depOutletsRoads,abvStreetN,0,254', "CLOSEST", "1000 Meters", "cutDist")
-    arcpy.DeleteField_management("depOutlets", ["Join_Count"])
-    arcpy.DeleteField_management("depOutlets", ["TARGET_FID"])
+    # Join runoff table to watershedsPoly
+    arcpy.JoinField_management("watershedsPoly", "FROM_ID", arcpy.env.scratchGDB + "\\runoff", "FROM_ID", ["runVolS","runInS","runOffS","RORUS","RORInc","RORDS"])
+    arcpy.Delete_management(arcpy.env.scratchGDB + "\\runoff")
 
 # Make transects across flowPaths for stream power and travel time calculations
 def makeTransects():
     # Smoothing doesn't seem to fix the transect orientation issue
+    # Identify transects that intersect cutLines for later exclusion?
     # arcpy.management.CopyFeatures("flowPaths", os.path.join(path,"flowPathsSmooth"), None, None, None, None)
     # arcpy.edit.Generalize("flowPathsSmooth", "6 Meters")
-    arcpy.management.GenerateTransectsAlongLines("flowPaths", os.path.join(path,"transects"), "100 Meters", "32 Meters", "END_POINTS")
-    arcpy.AlterField_management("transects", "ORIG_FID", "pathID", "pathID")
-    # Identify transects that intersect cutLines for later exclusion?
-    arcpy.management.GeneratePointsAlongLines("transects", os.path.join(path,"transectPoints"), "DISTANCE", "2 Meters", None, "END_POINTS")
-    arcpy.AlterField_management("transectPoints", "ORIG_FID", "transectID", "transectID")
-    arcpy.AddField_management("transectPoints", "pointID", "LONG")
-    arcpy.CalculateField_management("transectPoints", "pointID", "!OBJECTID!")
-    arcpy.DeleteField_management("transectPoints", ["Shape_Length"]) # Delete Shape_Length field so extract values to points will work
-    arcpy.sa.ExtractValuesToPoints("transectPoints", os.path.join(path,"demFill"), os.path.join(path,"transectPoints2"), "NONE", "VALUE_ONLY")
-    arcpy.AlterField_management("transectPoints2", "RASTERVALU", "Elevation", "Elevation")
-    arcpy.conversion.FeatureToRaster("flowPaths", "OBJECTID", os.path.join(path,"flowPathsR"), 2)
-    arcpy.sa.ZonalStatisticsAsTable("flowPathsR", "VALUE", os.path.join(path,"D8FlowAcc"), os.path.join(path,"flowPathsFA"), "DATA", "MEDIAN")
-    arcpy.JoinField_management("flowPaths", "OBJECTID", os.path.join(path,"flowPathsFA"), "Value", ["MEDIAN"])
-    arcpy.AlterField_management("flowPaths", "MEDIAN", "FlowAcc", "FlowAcc")
-    arcpy.JoinField_management("flowPaths", "FROM_ID", "watershedsPoly", "FROM_ID", ["RORUS"])
-    arcpy.AddField_management("flowPaths", "LengthM", "DOUBLE")
-    arcpy.CalculateGeometryAttributes_management("flowPaths", [["LengthM","LENGTH"]], "METERS")
+    arcpy.DeleteField_management(os.path.join(path,"flowPaths"), ["FlowAcc","RORUS","LengthM","n","USP","TT"])
+    arcpy.DeleteField_management(os.path.join(path,"watershedsPoly"), ["TT","TTDS"])
+    arcpy.management.GenerateTransectsAlongLines(os.path.join(path,"flowPaths"), os.path.join(path,"transects"), "100 Meters", "32 Meters", "END_POINTS")
+    arcpy.AlterField_management(os.path.join(path,"transects"), "ORIG_FID", "pathID", "pathID")
+    arcpy.management.GeneratePointsAlongLines(os.path.join(path,"transects"), os.path.join(path,"transectPoints2"), "DISTANCE", "2 Meters", None, "END_POINTS")
+    arcpy.AlterField_management(os.path.join(path,"transectPoints2"), "ORIG_FID", "transectID", "transectID")
+    arcpy.AddField_management(os.path.join(path,"transectPoints2"), "pointID", "LONG")
+    arcpy.CalculateField_management(os.path.join(path,"transectPoints2"), "pointID", "!OBJECTID!")
+    arcpy.DeleteField_management(os.path.join(path,"transectPoints2"), ["Shape_Length"]) # Delete Shape_Length field so extract values to points will work
+    arcpy.sa.ExtractValuesToPoints(os.path.join(path,"transectPoints2"), os.path.join(path,"demFill"), os.path.join(path,"transectPoints"), "NONE", "VALUE_ONLY")
+    arcpy.AlterField_management(os.path.join(path,"transectPoints"), "RASTERVALU", "Elevation", "Elevation")
+    arcpy.conversion.FeatureToRaster(os.path.join(path,"flowPaths"), "OBJECTID", os.path.join(path,"flowPathsR"), 2)
+    arcpy.sa.ZonalStatisticsAsTable(os.path.join(path,"flowPathsR"), "VALUE", os.path.join(path,"D8FlowAcc"), os.path.join(path,"flowPathsFA"), "DATA", "MEDIAN")
+    arcpy.JoinField_management(os.path.join(path,"flowPaths"), "OBJECTID", os.path.join(path,"flowPathsFA"), "Value", ["MEDIAN"])
+    arcpy.AlterField_management(os.path.join(path,"flowPaths"), "MEDIAN", "FlowAcc", "FlowAcc")
+    arcpy.JoinField_management(os.path.join(path,"flowPaths"), "FROM_ID", os.path.join(path,"watershedsPoly"), "FROM_ID", ["RORUS"])
+    arcpy.AddField_management(os.path.join(path,"flowPaths"), "LengthM", "DOUBLE")
+    arcpy.CalculateGeometryAttributes_management(os.path.join(path,"flowPaths"), [["LengthM","LENGTH"]], "METERS")
     arcpy.Delete_management(os.path.join(path,"flowPathsFA"))
     arcpy.Delete_management(os.path.join(path,"flowPathsR"))
+    arcpy.Delete_management(os.path.join(path,"transectPoints2"))
+    
+# Join results of R Manning test script to flowPaths, transects, and watershedsPoly
+def USPTravel(): 
+    arcpy.JoinField_management(os.path.join(path,"flowPaths"), "OBJECTID", os.path.join(path,"flowPathsUSP"), "OBJECTID_1", ["n","USP","TT"])
+    arcpy.JoinField_management(os.path.join(path,"transects"), "OBJECTID", os.path.join(path,"transectsUSP"), "transectID", ["Qd","S","W","Dmax","A","Qprop","Wusp","V","L","USP","TT"])
+    arcpy.JoinField_management(os.path.join(path,"watershedsPoly"), "FROM_ID", os.path.join(path,"watershedsTTDS"), "FROM_ID", ["TT","TTDS"])
+    arcpy.Delete_management(os.path.join(path,"flowPathsUSP"))
+    arcpy.Delete_management(os.path.join(path,"transectsUSP"))
+    arcpy.Delete_management(os.path.join(path,"watershedsTTDS"))
     
 # Flow path point elevation drop and flow accumulation
 def flowPathPoints():
@@ -457,33 +476,7 @@ def flowPathPoints():
     arcpy.Delete_management(os.path.join(path,"flowPathPointsCopy"))
     arcpy.Delete_management(os.path.join(path,"flowPathPoints2"))
     arcpy.Delete_management(os.path.join(path,"flowPathPoints1"))
-
-# Join results of R Manning test script to flowPaths, transects, and watershedsPoly
-def USPTravel(): 
-    arcpy.JoinField_management("flowPaths", "FROM_ID", os.path.join(path,"flowPathsUSP"), "FROM_ID", ["n","USP","TT"])
-    arcpy.JoinField_management("transects", "OBJECTID", os.path.join(path,"transectsUSP"), "transectID", ["Qd","S","W","USP","TT"])
-    arcpy.JoinField_management("watershedsPoly", "FROM_ID", os.path.join(path,"watershedsTTDS"), "FROM_ID", ["TT","TTDS"])
-    arcpy.Delete_management(os.path.join(path,"flowPathsUSP"))
-    arcpy.Delete_management(os.path.join(path,"transectsUSP"))
-    arcpy.Delete_management(os.path.join(path,"watershedsTTDS"))
-    arcpy.Delete_management(os.path.join(path,"transectPoints"))
-    arcpy.Delete_management(os.path.join(path,"transectPoints2"))    
     
-# Select watersheds that are upstream of a selected watershed
-def selectUpstream():
-    i = 0
-    j = 1
-    FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("watershedsPoly", "FROM_ID")]))
-    while True:
-        query = "TO_ID IN (" + str(FROMS)[1:-1] + ")"
-        arcpy.SelectLayerByAttribute_management("watershedsPoly", "ADD_TO_SELECTION", query, None)
-        FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("watershedsPoly", "FROM_ID")]))
-        j = int(arcpy.GetCount_management("watershedsPoly")[0])
-        if j == i:
-            break
-        else:
-            i = j
-            
 # Create a raster of cut depths around a stream to reduce slope to specified value            
 def BankSlope(slope):
     arcpy.conversion.PolylineToRaster(os.path.join(path,"flowPathsMain"), "OBJECTID", os.path.join(path,"strm_ras"), "", "", 2)
@@ -517,3 +510,49 @@ def BankSlope(slope):
     cutRaw = arcpy.sa.Minus("RelElev50m", "slopecm")
     cut = arcpy.sa.Con("cutRaw", 0, "cutRaw", "VALUE <= 0")
     cut.save(os.path.join(path,"cut"))
+ 
+# Select watersheds that are upstream of a selected watershed
+def selectUpstream():
+    i = 0
+    j = 1
+    FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("watershedsPoly", "FROM_ID")]))
+    while True:
+        query = "TO_ID IN (" + str(FROMS)[1:-1] + ")"
+        arcpy.SelectLayerByAttribute_management("watershedsPoly", "ADD_TO_SELECTION", query, None)
+        FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("watershedsPoly", "FROM_ID")]))
+        j = int(arcpy.GetCount_management("watershedsPoly")[0])
+        if j == i:
+            break
+        else:
+            i = j      
+
+# Select flow paths that are downstream of a selected flow path
+def selectDownstream():
+    i = 0
+    j = 1
+    TOS = sorted(set([r[0] for r in arcpy.da.SearchCursor("flowPaths", "TO_ID")]))
+    while True:
+        query = "FROM_ID IN (" + str(TOS)[1:-1] + ")"
+        arcpy.SelectLayerByAttribute_management("flowPaths", "ADD_TO_SELECTION", query, None)
+        TOS = sorted(set([r[0] for r in arcpy.da.SearchCursor("flowPaths", "TO_ID")]))
+        j = int(arcpy.GetCount_management("flowPaths")[0])
+        if j == i:
+            break
+        else:
+            i = j                  
+            
+# Select watersheds that are upstream of a selected watershed in the same HUC12
+def selectUpstreamInHUC12(HUC12):
+    i = 0
+    j = 1
+    FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("ACPFDaneWatersheds", "FROM_ID")]))
+    while True:
+        query = f"TO_ID IN (" + str(FROMS)[1:-1] + ") And HUC12 = " + "\'" + HUC12 + "\'"
+        arcpy.SelectLayerByAttribute_management("ACPFDaneWatersheds", "ADD_TO_SELECTION", query, None)
+        FROMS = sorted(set([r[0] for r in arcpy.da.SearchCursor("ACPFDaneWatersheds", "FROM_ID")]))
+        j = int(arcpy.GetCount_management("ACPFDaneWatersheds")[0])
+        if j == i:
+            break
+        else:
+            i = j       
+            
