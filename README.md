@@ -8,3 +8,5 @@ This script and set of functions takes a HUC12 LiDAR DEM as input and conducts t
 4. Define watershed topology from node intersections and LakeCat tool
 5. Calculate runoff from a design storm with curve number hydrology
 6. Calculate unit stream power of flow paths
+
+This presentation provides more conceptual background and an example workflow: Concepts and Tools for Hydrologic Modeling with LiDAR.pdf
