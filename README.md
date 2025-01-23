@@ -9,4 +9,4 @@ This script and set of functions takes a HUC12 LiDAR DEM as input and conducts t
 5. Calculate runoff from a design storm with curve number hydrology
 6. Calculate unit stream power of flow paths
 
-[This presentation](Concepts and Tools for Hydrologic Modeling with LiDAR.pdf) provides more conceptual background and an example workflow.
+[This presentation](https://github.com/mattdiebel/ACPFDane/blob/main/Concepts%20and%20Tools%20for%20Hydrologic%20Modeling%20with%20LiDAR.pdf) provides more conceptual background and an example workflow.
